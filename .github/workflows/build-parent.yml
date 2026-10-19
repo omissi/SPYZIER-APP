@@ -1,0 +1,69 @@
+name: Build Parent APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-parent:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Download parent source
+        uses: actions/checkout@v4
+        with:
+          repository: omissi/SPYZIER-APP
+          ref: master
+          submodules: false
+
+      - name: Set up Java for Android SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+
+      - name: Install Android build packages
+        run: sdkmanager "platforms;android-28" "build-tools;28.0.3"
+
+      - name: Fix legacy repositories
+        shell: bash
+        run: |
+          sed -i 's/jcenter()/mavenCentral()/g' build.gradle
+          cat >> build.gradle <<'EOF'
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              configurations.all {
+                  resolutionStrategy.force 'com.android.volley:volley:1.2.1'
+              }
+          }
+          EOF
+
+      - name: Set up Java for legacy Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Build parent APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace --console=plain
+
+      - name: Upload parent APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: parent-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
