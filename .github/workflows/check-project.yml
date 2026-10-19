@@ -17,10 +17,7 @@ jobs:
           submodules: false
 
       - name: Download child project
-        run: |
-          git clone --depth 1 \
-            https://github.com/ranaaditya/Child-SPYZIER-APP.git \
-            "$RUNNER_TEMP/child-source"
+        run: git clone --depth 1 https://github.com/ranaaditya/Child-SPYZIER-APP.git "$RUNNER_TEMP/child-source"
 
       - name: Show build configuration
         shell: bash
@@ -28,15 +25,10 @@ jobs:
           for project in "$GITHUB_WORKSPACE" "$RUNNER_TEMP/child-source"; do
             echo "========== PROJECT: $project =========="
 
-            if [ -f "$project/gradle/wrapper/gradle-wrapper.properties" ]; then
-              grep 'distributionUrl=' \
-                "$project/gradle/wrapper/gradle-wrapper.properties" || true
+            wrapper="$project/gradle/wrapper/gradle-wrapper.properties"
+            if [ -f "$wrapper" ]; then
+              grep 'distributionUrl=' "$wrapper" || true
             fi
 
-            find "$project" -maxdepth 3 -type f \
-              ( -name 'build.gradle' -o -name 'build.gradle.kts' ) \
-              -print \
-              -exec grep -nE \
-              'com.android.tools.build:gradle|com.google.gms:google-services|compileSdk|buildToolsVersion|minSdk|targetSdk|applicationId|jcenter' \
-              {} ; || true
+            find "$project" -maxdepth 3 -type f '(' -name 'build.gradle' -o -name 'build.gradle.kts' ')' -print -exec grep -nE 'com.android.tools.build:gradle|com.google.gms:google-services|compileSdk|buildToolsVersion|minSdk|targetSdk|applicationId|jcenter' '{}' ';' || true
           done
