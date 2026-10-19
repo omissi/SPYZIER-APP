@@ -1,4 +1,4 @@
-name: Build Parent and Child APKs
+name: Build Child APK
 
 on:
   workflow_dispatch:
@@ -7,29 +7,17 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build ${{ matrix.app }}
+  build-child:
+    name: Build child
     runs-on: ubuntu-22.04
     timeout-minutes: 30
 
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - app: parent
-            repository: omissi/SPYZIER-APP
-            branch: master
-
-          - app: child
-            repository: ranaaditya/Child-SPYZIER-APP
-            branch: master
-
     steps:
-      - name: Download source
+      - name: Download child source
         uses: actions/checkout@v4
         with:
-          repository: ${{ matrix.repository }}
-          ref: ${{ matrix.branch }}
+          repository: ranaaditya/Child-SPYZIER-APP
+          ref: master
           submodules: false
 
       - name: Set up Java for Android SDK
@@ -44,9 +32,129 @@ jobs:
           packages: 'platform-tools'
 
       - name: Install Android build packages
+        run: sdkmanager "platforms;android-28" "build-tools;28.0.3"
+
+      - name: Fix legacy dependency repositories
         shell: bash
         run: |
-          sdkmanager "platforms;android-28" "build-tools;28.0.3"
+          sed -i 's/jcenter()/mavenCentral()/g' build.gradle
+          cat >> build.gradle <<'EOF'
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              configurations.all {
+                  resolutionStrategy.force 'com.android.volley:volley:1.2.1'
+              }
+          }
+          EOF
+
+      - name: Check actual FirebaseUI Storage usage
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          gradle = pathlib.Path("app/build.gradle")
+          config = gradle.read_text(encoding="utf-8")
+          dependency = "com.firebaseui:firebase-ui-storage:"
+
+          if dependency not in config:
+              print("No FirebaseUI Storage dependency to change.")
+              sys.exit(0)
+
+          sources = list(pathlib.Path("app/src").rglob("*.java"))
+          if not sources:
+              sys.exit("No Java sources found. Refusing to remove dependency.")
+
+          lexical = re.compile(
+              r'"(?:\\.|[^"\\])*"|'
+              r"'(?:\\.|[^'\\])*'|"
+              r"//[^\n]*|/\*[\s\S]*?\*/"
+          )
+
+          def without_comments(text):
+              return lexical.sub(
+                  lambda m: re.sub(r"[^\n]", " ", m.group())
+                  if m.group().startswith(("//", "/*")) else m.group(),
+                  text,
+              )
+
+          all_imports = re.compile(
+              r"^[ \t]*import[ \t]+[^;\n]+;[ \t]*", re.MULTILINE
+          )
+          ui_imports = re.compile(
+              r"^[ \t]*import[ \t]+(?:static[ \t]+)?"
+              r"com\.firebase\.ui\.storage\.[^;\n]+;[ \t]*",
+              re.MULTILINE,
+          )
+
+          names = {"FirebaseImageLoader", "FirebaseStorageGlideModule"}
+          originals = {}
+          bodies = {}
+
+          for path in sources:
+              text = path.read_text(encoding="utf-8")
+              originals[path] = text
+              clean = without_comments(text)
+              for match in ui_imports.finditer(clean):
+                  statement = match.group().strip()
+                  if "*" in statement or re.search(r"\bstatic\b", statement):
+                      print(f"{path}: {statement}")
+                      sys.exit("Wildcard or static FirebaseUI import needs review.")
+                  names.add(statement.rstrip(";").split(".")[-1].strip())
+              bodies[path] = all_imports.sub("", clean)
+
+          used = False
+          for path, body in bodies.items():
+              for number, line in enumerate(body.splitlines(), 1):
+                  if "com.firebase.ui.storage" in line or any(
+                      re.search(r"\b" + re.escape(name) + r"\b", line)
+                      for name in names
+                  ):
+                      print(f"{path}:{number}: {line.strip()}")
+                      used = True
+
+          if used:
+              sys.exit("Actual FirebaseUI Storage usage found. No dependency removed.")
+
+          uses_storage_sdk = any(
+              "com.google.firebase.storage" in without_comments(text)
+              for text in originals.values()
+          )
+          if uses_storage_sdk and "com.google.firebase:firebase-storage:" not in config:
+              sys.exit(
+                  "Firebase Storage SDK is used but no explicit version is declared. "
+                  "Review app/build.gradle before removing the FirebaseUI dependency."
+              )
+
+          remaining = []
+          for line in config.splitlines(keepends=True):
+              if dependency in line:
+                  if not re.fullmatch(
+                      r"[ \t]*(?:implementation|api|compile)[ \t]+"
+                      r"['\"]com\.firebaseui:firebase-ui-storage:[^'\"]+['\"]"
+                      r"[ \t]*;?[ \t]*(?://[^\n]*)?\n?",
+                      line,
+                  ):
+                      sys.exit("Dependency declaration needs review: " + line.strip())
+                  continue
+              remaining.append(line)
+
+          for path, text in originals.items():
+              updated = ui_imports.sub("", text)
+              if updated != text:
+                  path.write_text(updated, encoding="utf-8")
+                  print(f"Removed unused FirebaseUI imports: {path}")
+
+          gradle.write_text("".join(remaining), encoding="utf-8")
+          print("Removed unused FirebaseUI Storage dependency.")
+          print("Firebase Storage SDK imports and dependencies were preserved.")
+          PY
 
       - name: Set up Java for legacy Gradle
         uses: actions/setup-java@v4
@@ -54,58 +162,16 @@ jobs:
           distribution: temurin
           java-version: '8'
 
-      - name: Fix legacy dependency repositories
-        shell: bash
-        run: |
-          sed -i 's/jcenter()/mavenCentral()/g' build.gradle
-
-          cat >> build.gradle <<'EOF'
-
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-                  maven {
-                      url 'https://repo.gradle.org/gradle/libs-releases/'
-                  }
-              }
-
-              configurations.all {
-                  resolutionStrategy.force 'com.android.volley:volley:1.2.1'
-              }
-          }
-          EOF
-
-      - name: Check unavailable FirebaseUI Storage dependency
-        shell: bash
-        run: |
-          if ! grep -q 'com.firebaseui:firebase-ui-storage:' app/build.gradle; then
-            echo "FirebaseUI Storage dependency is not declared here."
-            exit 0
-          fi
-
-          echo "Checking source code for Storage usage..."
-
-          if grep -RInE 'com[.]firebase[.]ui[.]storage|com[.]google[.]firebase[.]storage|FirebaseImageLoader|FirebaseStorageGlideModule' app/src; then
-            echo "::error::Storage references found. Keep the dependency until the source code is reviewed."
-            exit 1
-          fi
-
-          echo "No matching Storage references found."
-          echo "Removing unavailable FirebaseUI Storage dependency for this build attempt."
-
-          sed -i '/com.firebaseui:firebase-ui-storage:/d' app/build.gradle
-
-      - name: Build debug APK
+      - name: Build child debug APK
         shell: bash
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon --stacktrace --console=plain
 
-      - name: Upload APK
+      - name: Upload child APK
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.app }}-debug-apk
+          name: child-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7
