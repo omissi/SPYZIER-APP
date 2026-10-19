@@ -19,6 +19,7 @@ jobs:
           - app: parent
             repository: omissi/SPYZIER-APP
             branch: master
+
           - app: child
             repository: ranaaditya/Child-SPYZIER-APP
             branch: master
@@ -43,13 +44,16 @@ jobs:
           packages: 'platform-tools'
 
       - name: Install Android build packages
-        run: sdkmanager "platforms;android-28" "build-tools;28.0.3"
+        shell: bash
+        run: |
+          sdkmanager "platforms;android-28" "build-tools;28.0.3"
 
       - name: Set up Java for legacy Gradle
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '8'
+
       - name: Fix legacy dependency repositories
         shell: bash
         run: |
@@ -71,6 +75,27 @@ jobs:
               }
           }
           EOF
+
+      - name: Check unavailable FirebaseUI Storage dependency
+        shell: bash
+        run: |
+          if ! grep -q 'com.firebaseui:firebase-ui-storage:' app/build.gradle; then
+            echo "FirebaseUI Storage dependency is not declared here."
+            exit 0
+          fi
+
+          echo "Checking source code for Storage usage..."
+
+          if grep -RInE 'com[.]firebase[.]ui[.]storage|com[.]google[.]firebase[.]storage|FirebaseImageLoader|FirebaseStorageGlideModule' app/src; then
+            echo "::error::Storage references found. Keep the dependency until the source code is reviewed."
+            exit 1
+          fi
+
+          echo "No matching Storage references found."
+          echo "Removing unavailable FirebaseUI Storage dependency for this build attempt."
+
+          sed -i '/com.firebaseui:firebase-ui-storage:/d' app/build.gradle
+
       - name: Build debug APK
         shell: bash
         run: |
