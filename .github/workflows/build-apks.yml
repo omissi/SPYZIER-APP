@@ -50,7 +50,27 @@ jobs:
         with:
           distribution: temurin
           java-version: '8'
+      - name: Fix legacy dependency repositories
+        shell: bash
+        run: |
+          sed -i 's/jcenter()/mavenCentral()/g' build.gradle
 
+          cat >> build.gradle <<'EOF'
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven {
+                      url 'https://repo.gradle.org/gradle/libs-releases/'
+                  }
+              }
+
+              configurations.all {
+                  resolutionStrategy.force 'com.android.volley:volley:1.2.1'
+              }
+          }
+          EOF
       - name: Build debug APK
         shell: bash
         run: |
